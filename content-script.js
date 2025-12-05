@@ -8,8 +8,8 @@ let rules = [];
 let observer = null;
 let processingTimeout = null;
 let messageListContainer = null;
-let lastContainerCheck = 0;
 let navigationObserver = null;
+let navigationCheckTimeout = null;
 
 // Initialize when DOM is ready
 if (document.readyState === 'loading') {
@@ -28,23 +28,27 @@ function watchForNavigation() {
   }
 
   navigationObserver = new MutationObserver((mutations) => {
-    // Check if the message list container has been replaced
-    const currentContainer = findMessageListContainer();
+    // Debounce navigation checks to avoid excessive DOM queries during rapid changes
+    clearTimeout(navigationCheckTimeout);
+    navigationCheckTimeout = setTimeout(() => {
+      // Check if the message list container has been replaced
+      const currentContainer = findMessageListContainer();
 
-    if (currentContainer !== messageListContainer) {
-      // Container changed - likely a page navigation
-      console.log('Gmail Row Highlighter: Detected page navigation, re-initializing...');
-      messageListContainer = currentContainer;
+      if (currentContainer && currentContainer !== messageListContainer) {
+        // Container changed - likely a page navigation
+        console.log('Gmail Row Highlighter: Detected page navigation, re-initializing...');
+        messageListContainer = currentContainer;
 
-      if (messageListContainer) {
-        // Re-setup observer on new container
-        setupObserver();
-        // Process rows after a short delay to let Gmail finish loading
-        setTimeout(() => {
-          processAllRows();
-        }, 500);
+        if (messageListContainer) {
+          // Re-setup observer on new container
+          setupObserver();
+          // Process rows after a short delay to let Gmail finish loading
+          setTimeout(() => {
+            processAllRows();
+          }, 500);
+        }
       }
-    }
+    }, 300);
   });
 
   navigationObserver.observe(mainContent, {
@@ -89,17 +93,6 @@ async function init() {
         }
       }, 2000);
     }
-
-    // Periodically check for container changes (fallback for navigation detection)
-    setInterval(() => {
-      const currentContainer = findMessageListContainer();
-      if (currentContainer && currentContainer !== messageListContainer) {
-        console.log('Gmail Row Highlighter: Container changed, re-initializing...');
-        messageListContainer = currentContainer;
-        setupObserver();
-        setTimeout(() => processAllRows(), 300);
-      }
-    }, 2000);
 
   } catch (error) {
     console.error('Gmail Row Highlighter: Initialization error', error);
