@@ -3,6 +3,7 @@
 const STORAGE_KEY = 'gmailRowHighlighterRules';
 const DATA_ATTRIBUTE = 'data-highlight-rule-id';
 const PROCESSED_ATTRIBUTE = 'data-highlight-processed';
+const pendingRemovalTimers = new WeakMap();
 
 let rules = [];
 let observer = null;
@@ -42,10 +43,10 @@ function watchForNavigation() {
         if (messageListContainer) {
           // Re-setup observer on new container
           setupObserver();
-          // Process rows after a short delay to let Gmail finish loading
+          // Process rows after a brief delay to let Gmail finish loading
           setTimeout(() => {
             processAllRows();
-          }, 500);
+          }, 150);
         }
       }
     }, 300);
@@ -101,7 +102,9 @@ async function init() {
 
 // Wait for Gmail to be ready
 function waitForGmail() {
-  return new Promise((resolve) => {
+  return new Promise((resolve, reject) => {
+    let timeoutId = null;
+
     // Check if Gmail is loaded by looking for common Gmail elements
     const checkGmail = () => {
       const gmailIndicators = [
@@ -111,6 +114,9 @@ function waitForGmail() {
       ];
 
       if (gmailIndicators.some(el => el !== null)) {
+        if (timeoutId) {
+          clearTimeout(timeoutId);
+        }
         resolve();
       } else {
         setTimeout(checkGmail, 100);
@@ -120,9 +126,49 @@ function waitForGmail() {
     // Start checking after a short delay
     setTimeout(checkGmail, 500);
 
-    // Timeout after 10 seconds
-    setTimeout(resolve, 10000);
+    // Timeout after 10 seconds -> reject for proper error handling
+    timeoutId = setTimeout(() => {
+      reject(new Error('Gmail did not load within timeout period'));
+    }, 10000);
   });
+}
+
+// Clear any pending removal timers for a row
+function clearPendingRemoval(row) {
+  const pendingTimer = pendingRemovalTimers.get(row);
+  if (pendingTimer) {
+    clearTimeout(pendingTimer);
+    pendingRemovalTimers.delete(row);
+  }
+}
+
+// Schedule a removal after a short delay to avoid flicker during transient mutations
+function scheduleRemovalIfStillNonMatching(row, ruleId) {
+  clearPendingRemoval(row);
+
+  const timerId = setTimeout(() => {
+    pendingRemovalTimers.delete(row);
+
+    const latestRule = rules.find(r => r.id === ruleId);
+    if (!latestRule || latestRule.enabled === false) {
+      removeHighlight(row);
+      return;
+    }
+
+    const latestData = extractRowData(row);
+    const hasData = latestData.sender || latestData.subject || latestData.labels.length > 0;
+    if (!hasData) {
+      // If data is still empty, keep the highlight to avoid flicker
+      return;
+    }
+
+    const stillMatches = checkRuleMatch(latestData, latestRule);
+    if (!stillMatches) {
+      removeHighlight(row);
+    }
+  }, 250);
+
+  pendingRemovalTimers.set(row, timerId);
 }
 
 // Find message list container
@@ -192,7 +238,7 @@ function setupObserver() {
     clearTimeout(processingTimeout);
     processingTimeout = setTimeout(() => {
       processMutationChanges(mutations);
-    }, 150);
+    }, 100);
   });
 
   observer.observe(messageListContainer, {
@@ -316,6 +362,7 @@ function processRow(row) {
 
     // Apply or update highlight
     if (matchingRule) {
+      clearPendingRemoval(row);
       // We found a matching rule - apply it
       // Only update if it's different from current
       if (!currentRuleId || currentRuleId !== matchingRule.id) {
@@ -326,23 +373,29 @@ function processRow(row) {
       // First check if the current rule exists and is enabled
       if (!currentRule) {
         // Rule was deleted - remove highlight
+        clearPendingRemoval(row);
         removeHighlight(row);
       } else if (currentRule.enabled === false) {
         // Rule is disabled - always remove highlight
+        clearPendingRemoval(row);
         removeHighlight(row);
       } else if (hasValidData) {
         // Rule exists and is enabled, but doesn't match current data
         // Re-check if current rule still matches with current data
         const stillMatches = checkRuleMatch(rowData, currentRule);
         if (!stillMatches) {
-          // Rule no longer matches - remove highlight
-          removeHighlight(row);
+          // Rule no longer matches - schedule removal to avoid flicker during rapid DOM updates
+          scheduleRemovalIfStillNonMatching(row, currentRule.id);
         }
         // If it still matches, keep the highlight
+        else {
+          clearPendingRemoval(row);
+        }
       }
       // If we don't have valid data and rule is enabled, preserve existing highlight (defensive approach)
     } else {
       // No matching rule and no existing highlight - ensure it's clean
+      clearPendingRemoval(row);
       removeHighlight(row);
     }
 
