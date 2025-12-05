@@ -29,11 +29,11 @@ document.addEventListener('DOMContentLoaded', () => {
 function initializeColorPicker() {
   const colorInput = document.getElementById('ruleColor');
   const colorText = document.getElementById('ruleColorText');
-  
+
   colorInput.addEventListener('input', (e) => {
     colorText.value = e.target.value.toUpperCase();
   });
-  
+
   colorText.addEventListener('click', () => {
     colorInput.click();
   });
@@ -70,19 +70,19 @@ function loadRules() {
 // Render rules list
 function renderRules() {
   const rulesList = document.getElementById('rulesList');
-  
+
   if (rules.length === 0) {
     rulesList.innerHTML = '<div class="empty-state">No rules yet. Add a rule above to get started.</div>';
     return;
   }
-  
+
   rulesList.innerHTML = rules.map(rule => {
     const typeLabel = getTypeLabel(rule.type);
     const typeClass = getTypeClass(rule.type);
     const disabledClass = rule.enabled === false ? 'disabled' : '';
     const ruleId = rule.id;
-    const color = rule.backgroundColor.toUpperCase();
-    
+    const color = (rule.backgroundColor || DEFAULT_COLOR).toString().toUpperCase();
+
     return `
       <div class="rule-item ${disabledClass}" data-rule-id="${ruleId}">
         <div class="rule-info">
@@ -156,7 +156,7 @@ function renderRules() {
       </div>
     `;
   }).join('');
-  
+
   // Note: Event listeners are attached once via event delegation in initialization
   // No need to re-attach on every render
 }
@@ -188,14 +188,14 @@ function addRule() {
   const type = document.getElementById('ruleType').value;
   const pattern = document.getElementById('rulePattern').value.trim();
   const color = document.getElementById('ruleColor').value;
-  
+
   // Validate
   const validation = validateRule(type, pattern, color);
   if (!validation.valid) {
     showValidationError(validation.error);
     return;
   }
-  
+
   // Create rule object
   const rule = {
     id: generateId(),
@@ -204,19 +204,19 @@ function addRule() {
     backgroundColor: color.toUpperCase(),
     enabled: true
   };
-  
+
   // Add to rules array
   rules.push(rule);
-  
+
   // Save to storage
   saveRules();
-  
+
   // Reset form
   document.getElementById('addRuleForm').reset();
   document.getElementById('ruleColor').value = DEFAULT_COLOR;
   document.getElementById('ruleColorText').value = DEFAULT_COLOR;
   clearValidationError();
-  
+
   // Show success
   showStatus('Rule added successfully', 'success');
 }
@@ -263,33 +263,33 @@ function validateRule(type, pattern, color) {
   if (!Object.values(RULE_TYPES).includes(type)) {
     return { valid: false, error: 'Invalid rule type' };
   }
-  
+
   // Validate pattern
   if (!pattern || pattern.length === 0) {
     return { valid: false, error: 'Pattern cannot be empty' };
   }
-  
+
   if (pattern.length > 200) {
     return { valid: false, error: 'Pattern is too long (max 200 characters)' };
   }
-  
+
   // Validate color
   if (!isValidColor(color)) {
     return { valid: false, error: 'Invalid color' };
   }
-  
+
   return { valid: true };
 }
 
 // Check if color is valid
 function isValidColor(color) {
   if (!color) return false;
-  
+
   // Check hex color
   if (/^#([A-Fa-f0-9]{6}|[A-Fa-f0-9]{3})$/.test(color)) {
     return true;
   }
-  
+
   // Check named colors (basic check)
   const s = new Option().style;
   s.color = color;
@@ -306,7 +306,7 @@ function showStatus(message, type = 'success') {
   const statusEl = document.getElementById('statusMessage');
   statusEl.textContent = message;
   statusEl.className = `status-message show ${type}`;
-  
+
   // Auto-dismiss after 2 seconds
   setTimeout(() => {
     statusEl.classList.remove('show');
@@ -339,25 +339,26 @@ function showColorPicker(ruleId, event) {
   if (event) {
     event.stopPropagation();
   }
-  
+
   // Hide all other color pickers
   document.querySelectorAll('.color-picker-inline').forEach(picker => {
     picker.classList.remove('show');
   });
-  
+
   // Show this color picker
   const picker = document.getElementById(`color-picker-${ruleId}`);
-  
+
   if (picker) {
     picker.classList.add('show');
-    
+
     // Sync color input with current color
     const rule = rules.find(r => r.id === ruleId);
     if (rule) {
       const colorInput = document.getElementById(`color-input-${ruleId}`);
       const colorText = document.getElementById(`color-text-${ruleId}`);
-      if (colorInput) colorInput.value = rule.backgroundColor;
-      if (colorText) colorText.value = rule.backgroundColor.toUpperCase();
+      const color = (rule.backgroundColor || DEFAULT_COLOR).toString().toUpperCase();
+      if (colorInput) colorInput.value = color;
+      if (colorText) colorText.value = color;
     }
   }
 }
@@ -390,27 +391,27 @@ function updateColorFromText(ruleId, colorText) {
 function saveColorChange(ruleId) {
   const colorInput = document.getElementById(`color-input-${ruleId}`);
   if (!colorInput) return;
-  
+
   const newColor = colorInput.value.toUpperCase();
-  
+
   // Validate color
   if (!isValidColor(newColor)) {
     showStatus('Invalid color', 'error');
     return;
   }
-  
+
   // Find and update rule
   const rule = rules.find(r => r.id === ruleId);
   if (rule) {
     rule.backgroundColor = newColor;
     saveRules();
-    
+
     // Hide color picker
     const picker = document.getElementById(`color-picker-${ruleId}`);
     if (picker) {
       picker.classList.remove('show');
     }
-    
+
     // Update display
     const swatch = document.querySelector(`[data-rule-id="${ruleId}"] .color-swatch`);
     const display = document.getElementById(`color-display-${ruleId}`);
@@ -420,7 +421,7 @@ function saveColorChange(ruleId) {
     if (display) {
       display.textContent = newColor;
     }
-    
+
     showStatus('Color updated', 'success');
   }
 }
@@ -431,14 +432,15 @@ function cancelColorEdit(ruleId) {
   if (picker) {
     picker.classList.remove('show');
   }
-  
+
   // Reset to original color
   const rule = rules.find(r => r.id === ruleId);
   if (rule) {
     const colorInput = document.getElementById(`color-input-${ruleId}`);
     const colorText = document.getElementById(`color-text-${ruleId}`);
-    if (colorInput) colorInput.value = rule.backgroundColor;
-    if (colorText) colorText.value = rule.backgroundColor.toUpperCase();
+    const color = (rule.backgroundColor || DEFAULT_COLOR).toString().toUpperCase();
+    if (colorInput) colorInput.value = color;
+    if (colorText) colorText.value = color;
   }
 }
 
@@ -448,9 +450,9 @@ let eventListenersAttached = false;
 function attachRuleEventListeners() {
   const rulesList = document.getElementById('rulesList');
   if (!rulesList || eventListenersAttached) return;
-  
+
   eventListenersAttached = true;
-  
+
   // Use event delegation for all dynamic elements
   rulesList.addEventListener('click', (e) => {
     // Color swatch click
@@ -462,7 +464,7 @@ function attachRuleEventListeners() {
       }
       return;
     }
-    
+
     // Save color button
     if (e.target.classList.contains('save-color-btn')) {
       e.stopPropagation();
@@ -472,7 +474,7 @@ function attachRuleEventListeners() {
       }
       return;
     }
-    
+
     // Cancel color button
     if (e.target.classList.contains('cancel-color-btn')) {
       e.stopPropagation();
@@ -482,7 +484,7 @@ function attachRuleEventListeners() {
       }
       return;
     }
-    
+
     // Toggle rule button
     if (e.target.classList.contains('toggle-rule-btn')) {
       const ruleId = e.target.getAttribute('data-rule-id');
@@ -491,7 +493,7 @@ function attachRuleEventListeners() {
       }
       return;
     }
-    
+
     // Delete rule button
     if (e.target.classList.contains('delete-rule-btn')) {
       const ruleId = e.target.getAttribute('data-rule-id');
@@ -500,7 +502,7 @@ function attachRuleEventListeners() {
       }
       return;
     }
-    
+
     // Edit rule button
     if (e.target.classList.contains('edit-rule-btn')) {
       e.stopPropagation();
@@ -510,7 +512,7 @@ function attachRuleEventListeners() {
       }
       return;
     }
-    
+
     // Save edit button
     if (e.target.classList.contains('save-edit-btn')) {
       e.stopPropagation();
@@ -520,7 +522,7 @@ function attachRuleEventListeners() {
       }
       return;
     }
-    
+
     // Cancel edit button
     if (e.target.classList.contains('cancel-edit-btn')) {
       e.stopPropagation();
@@ -531,18 +533,18 @@ function attachRuleEventListeners() {
       return;
     }
   });
-  
+
   // Color input change handlers
   rulesList.addEventListener('input', (e) => {
     const ruleId = e.target.getAttribute('data-rule-id');
     if (!ruleId) return;
-    
+
     // Color picker input
     if (e.target.type === 'color') {
       updateColorInput(ruleId, e.target.value);
       return;
     }
-    
+
     // Color text input
     if (e.target.id && e.target.id.startsWith('color-text-')) {
       updateColorFromText(ruleId, e.target.value);
@@ -558,17 +560,17 @@ function setupClickOutsideHandler() {
     const isInsidePicker = e.target.closest('.color-picker-inline');
     const isColorSwatch = e.target.closest('.color-swatch');
     const isPickerButton = e.target.closest('.color-picker-inline button');
-    
+
     if (!isInsidePicker && !isColorSwatch && !isPickerButton) {
       document.querySelectorAll('.color-picker-inline').forEach(picker => {
         picker.classList.remove('show');
       });
     }
-    
+
     // If clicking outside an edit form, close all edit forms
     const isInsideEditForm = e.target.closest('.rule-edit-form');
     const isEditButton = e.target.closest('.edit-rule-btn');
-    
+
     if (!isInsideEditForm && !isEditButton) {
       document.querySelectorAll('.rule-edit-form').forEach(form => {
         form.classList.remove('show');
@@ -597,17 +599,17 @@ function showEditForm(ruleId) {
   document.querySelectorAll('.rule-edit-form').forEach(form => {
     form.classList.remove('show');
   });
-  
+
   // Hide all color pickers
   document.querySelectorAll('.color-picker-inline').forEach(picker => {
     picker.classList.remove('show');
   });
-  
+
   // Show this edit form
   const editForm = document.getElementById(`edit-form-${ruleId}`);
   if (editForm) {
     editForm.classList.add('show');
-    
+
     // Scroll into view if needed
     editForm.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
   }
@@ -618,39 +620,39 @@ function saveRuleEdit(ruleId) {
   const typeInput = document.getElementById(`edit-type-${ruleId}`);
   const patternInput = document.getElementById(`edit-pattern-${ruleId}`);
   const colorInput = document.getElementById(`edit-color-${ruleId}`);
-  
+
   if (!typeInput || !patternInput || !colorInput) {
     showStatus('Error: Could not find edit form fields', 'error');
     return;
   }
-  
+
   const type = typeInput.value;
   const pattern = patternInput.value.trim();
   const color = colorInput.value.toUpperCase();
-  
+
   // Validate
   const validation = validateRule(type, pattern, color);
   if (!validation.valid) {
     showStatus(validation.error, 'error');
     return;
   }
-  
+
   // Find and update rule
   const rule = rules.find(r => r.id === ruleId);
   if (rule) {
     rule.type = type;
     rule.pattern = pattern;
     rule.backgroundColor = color;
-    
+
     // Save to storage
     saveRules();
-    
+
     // Hide edit form
     const editForm = document.getElementById(`edit-form-${ruleId}`);
     if (editForm) {
       editForm.classList.remove('show');
     }
-    
+
     showStatus('Rule updated successfully', 'success');
   } else {
     showStatus('Error: Rule not found', 'error');
@@ -663,7 +665,7 @@ function cancelRuleEdit(ruleId) {
   if (editForm) {
     editForm.classList.remove('show');
   }
-  
+
   // Reset form fields to original values
   const rule = rules.find(r => r.id === ruleId);
   if (rule) {
@@ -671,11 +673,12 @@ function cancelRuleEdit(ruleId) {
     const patternInput = document.getElementById(`edit-pattern-${ruleId}`);
     const colorInput = document.getElementById(`edit-color-${ruleId}`);
     const colorText = document.getElementById(`edit-color-text-${ruleId}`);
-    
+
     if (typeInput) typeInput.value = rule.type;
     if (patternInput) patternInput.value = rule.pattern;
-    if (colorInput) colorInput.value = rule.backgroundColor;
-    if (colorText) colorText.value = rule.backgroundColor.toUpperCase();
+    const color = (rule.backgroundColor || DEFAULT_COLOR).toString().toUpperCase();
+    if (colorInput) colorInput.value = color;
+    if (colorText) colorText.value = color;
   }
 }
 

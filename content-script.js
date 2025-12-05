@@ -3,13 +3,14 @@
 const STORAGE_KEY = 'gmailRowHighlighterRules';
 const DATA_ATTRIBUTE = 'data-highlight-rule-id';
 const PROCESSED_ATTRIBUTE = 'data-highlight-processed';
+const pendingRemovalTimers = new WeakMap();
 
 let rules = [];
 let observer = null;
 let processingTimeout = null;
 let messageListContainer = null;
-let lastContainerCheck = 0;
 let navigationObserver = null;
+let navigationCheckTimeout = null;
 
 // Initialize when DOM is ready
 if (document.readyState === 'loading') {
@@ -22,31 +23,35 @@ if (document.readyState === 'loading') {
 function watchForNavigation() {
   // Observe the main content area for major DOM changes
   const mainContent = document.querySelector('[role="main"]') || document.body;
-  
+
   if (navigationObserver) {
     navigationObserver.disconnect();
   }
-  
+
   navigationObserver = new MutationObserver((mutations) => {
-    // Check if the message list container has been replaced
-    const currentContainer = findMessageListContainer();
-    
-    if (currentContainer !== messageListContainer) {
-      // Container changed - likely a page navigation
-      console.log('Gmail Row Highlighter: Detected page navigation, re-initializing...');
-      messageListContainer = currentContainer;
-      
-      if (messageListContainer) {
-        // Re-setup observer on new container
-        setupObserver();
-        // Process rows after a short delay to let Gmail finish loading
-        setTimeout(() => {
-          processAllRows();
-        }, 500);
+    // Debounce navigation checks to avoid excessive DOM queries during rapid changes
+    clearTimeout(navigationCheckTimeout);
+    navigationCheckTimeout = setTimeout(() => {
+      // Check if the message list container has been replaced
+      const currentContainer = findMessageListContainer();
+
+      if (currentContainer && currentContainer !== messageListContainer) {
+        // Container changed - likely a page navigation
+        console.log('Gmail Row Highlighter: Detected page navigation, re-initializing...');
+        messageListContainer = currentContainer;
+
+        if (messageListContainer) {
+          // Re-setup observer on new container
+          setupObserver();
+          // Process rows after a brief delay to let Gmail finish loading
+          setTimeout(() => {
+            processAllRows();
+          }, 150);
+        }
       }
-    }
+    }, 300);
   });
-  
+
   navigationObserver.observe(mainContent, {
     childList: true,
     subtree: true
@@ -58,24 +63,24 @@ async function init() {
   try {
     // Wait for Gmail to load
     await waitForGmail();
-    
+
     // Load rules from storage
     await loadRules();
-    
+
     // Set up storage change listener
     // Note: We add the listener each time, but it's safe to do so
     chrome.storage.onChanged.addListener(handleStorageChange);
-    
+
     // Watch for Gmail navigation
     watchForNavigation();
-    
+
     // Find message list container
     messageListContainer = findMessageListContainer();
-    
+
     if (messageListContainer) {
       // Process existing rows
       processAllRows();
-      
+
       // Set up MutationObserver
       setupObserver();
     } else {
@@ -89,18 +94,7 @@ async function init() {
         }
       }, 2000);
     }
-    
-    // Periodically check for container changes (fallback for navigation detection)
-    setInterval(() => {
-      const currentContainer = findMessageListContainer();
-      if (currentContainer && currentContainer !== messageListContainer) {
-        console.log('Gmail Row Highlighter: Container changed, re-initializing...');
-        messageListContainer = currentContainer;
-        setupObserver();
-        setTimeout(() => processAllRows(), 300);
-      }
-    }, 2000);
-    
+
   } catch (error) {
     console.error('Gmail Row Highlighter: Initialization error', error);
   }
@@ -108,7 +102,9 @@ async function init() {
 
 // Wait for Gmail to be ready
 function waitForGmail() {
-  return new Promise((resolve) => {
+  return new Promise((resolve, reject) => {
+    let timeoutId = null;
+
     // Check if Gmail is loaded by looking for common Gmail elements
     const checkGmail = () => {
       const gmailIndicators = [
@@ -116,20 +112,63 @@ function waitForGmail() {
         document.querySelector('table[role="grid"]'),
         document.querySelector('tbody')
       ];
-      
+
       if (gmailIndicators.some(el => el !== null)) {
+        if (timeoutId) {
+          clearTimeout(timeoutId);
+        }
         resolve();
       } else {
         setTimeout(checkGmail, 100);
       }
     };
-    
+
     // Start checking after a short delay
     setTimeout(checkGmail, 500);
-    
-    // Timeout after 10 seconds
-    setTimeout(resolve, 10000);
+
+    // Timeout after 10 seconds -> reject for proper error handling
+    timeoutId = setTimeout(() => {
+      reject(new Error('Gmail did not load within timeout period'));
+    }, 10000);
   });
+}
+
+// Clear any pending removal timers for a row
+function clearPendingRemoval(row) {
+  const pendingTimer = pendingRemovalTimers.get(row);
+  if (pendingTimer) {
+    clearTimeout(pendingTimer);
+    pendingRemovalTimers.delete(row);
+  }
+}
+
+// Schedule a removal after a short delay to avoid flicker during transient mutations
+function scheduleRemovalIfStillNonMatching(row, ruleId) {
+  clearPendingRemoval(row);
+
+  const timerId = setTimeout(() => {
+    pendingRemovalTimers.delete(row);
+
+    const latestRule = rules.find(r => r.id === ruleId);
+    if (!latestRule || latestRule.enabled === false) {
+      removeHighlight(row);
+      return;
+    }
+
+    const latestData = extractRowData(row);
+    const hasData = latestData.sender || latestData.subject || latestData.labels.length > 0;
+    if (!hasData) {
+      // If data is still empty, keep the highlight to avoid flicker
+      return;
+    }
+
+    const stillMatches = checkRuleMatch(latestData, latestRule);
+    if (!stillMatches) {
+      removeHighlight(row);
+    }
+  }, 250);
+
+  pendingRemovalTimers.set(row, timerId);
 }
 
 // Find message list container
@@ -141,14 +180,14 @@ function findMessageListContainer() {
     'tbody[role="presentation"]',
     'table tbody'
   ];
-  
+
   for (const selector of selectors) {
     const container = document.querySelector(selector);
     if (container) {
       return container;
     }
   }
-  
+
   return null;
 }
 
@@ -188,20 +227,20 @@ function handleStorageChange(changes, areaName) {
 // Set up MutationObserver
 function setupObserver() {
   if (!messageListContainer) return;
-  
+
   // Disconnect existing observer
   if (observer) {
     observer.disconnect();
   }
-  
+
   observer = new MutationObserver((mutations) => {
     // Debounce processing
     clearTimeout(processingTimeout);
     processingTimeout = setTimeout(() => {
       processMutationChanges(mutations);
-    }, 150);
+    }, 100);
   });
-  
+
   observer.observe(messageListContainer, {
     childList: true,
     subtree: true,
@@ -213,7 +252,7 @@ function setupObserver() {
 // Process mutation changes
 function processMutationChanges(mutations) {
   const rowsToProcess = new Set();
-  
+
   for (const mutation of mutations) {
     // Handle added nodes
     if (mutation.addedNodes) {
@@ -236,7 +275,7 @@ function processMutationChanges(mutations) {
         }
       }
     }
-    
+
     // Handle attribute changes (e.g., read/unread status, labels)
     // But skip our own attributes to avoid infinite loops
     if (mutation.type === 'attributes' && mutation.target) {
@@ -249,7 +288,7 @@ function processMutationChanges(mutations) {
       }
     }
   }
-  
+
   // Process collected rows
   rowsToProcess.forEach(row => processRow(row));
 }
@@ -257,13 +296,13 @@ function processMutationChanges(mutations) {
 // Check if element is a message row
 function isMessageRow(element) {
   if (!element || element.tagName !== 'TR') return false;
-  
+
   // Check for Gmail row indicators
-  const hasRowClass = element.classList.contains('zA') || 
-                      element.classList.contains('zE') || 
-                      element.classList.contains('yO');
+  const hasRowClass = element.classList.contains('zA') ||
+    element.classList.contains('zE') ||
+    element.classList.contains('yO');
   const hasRowRole = element.getAttribute('role') === 'row';
-  
+
   return hasRowClass || hasRowRole;
 }
 
@@ -287,17 +326,17 @@ function processAllRows() {
       return;
     }
   }
-  
+
   const rows = messageListContainer.querySelectorAll('tr');
   let processedCount = 0;
-  
+
   rows.forEach(row => {
     if (isMessageRow(row)) {
       processRow(row);
       processedCount++;
     }
   });
-  
+
   if (processedCount > 0) {
     console.log(`Gmail Row Highlighter: Processed ${processedCount} rows`);
   }
@@ -306,23 +345,24 @@ function processAllRows() {
 // Process a single row
 function processRow(row) {
   if (!row) return;
-  
+
   try {
     // Extract row data
     const rowData = extractRowData(row);
-    
+
     // Check if we have valid data (at least one field populated)
     const hasValidData = rowData.sender || rowData.subject || rowData.labels.length > 0;
-    
+
     // Check rules
     const matchingRule = findMatchingRule(rowData);
-    
+
     // Get current highlight state
     const currentRuleId = row.getAttribute(DATA_ATTRIBUTE);
     const currentRule = currentRuleId ? rules.find(r => r.id === currentRuleId) : null;
-    
+
     // Apply or update highlight
     if (matchingRule) {
+      clearPendingRemoval(row);
       // We found a matching rule - apply it
       // Only update if it's different from current
       if (!currentRuleId || currentRuleId !== matchingRule.id) {
@@ -333,26 +373,32 @@ function processRow(row) {
       // First check if the current rule exists and is enabled
       if (!currentRule) {
         // Rule was deleted - remove highlight
+        clearPendingRemoval(row);
         removeHighlight(row);
       } else if (currentRule.enabled === false) {
         // Rule is disabled - always remove highlight
+        clearPendingRemoval(row);
         removeHighlight(row);
       } else if (hasValidData) {
         // Rule exists and is enabled, but doesn't match current data
         // Re-check if current rule still matches with current data
         const stillMatches = checkRuleMatch(rowData, currentRule);
         if (!stillMatches) {
-          // Rule no longer matches - remove highlight
-          removeHighlight(row);
+          // Rule no longer matches - schedule removal to avoid flicker during rapid DOM updates
+          scheduleRemovalIfStillNonMatching(row, currentRule.id);
         }
         // If it still matches, keep the highlight
+        else {
+          clearPendingRemoval(row);
+        }
       }
       // If we don't have valid data and rule is enabled, preserve existing highlight (defensive approach)
     } else {
       // No matching rule and no existing highlight - ensure it's clean
+      clearPendingRemoval(row);
       removeHighlight(row);
     }
-    
+
     // Mark as processed
     row.setAttribute(PROCESSED_ATTRIBUTE, 'true');
   } catch (error) {
@@ -364,27 +410,27 @@ function processRow(row) {
 // Each pattern is matched as a complete phrase (not word-by-word)
 function matchesAnyPattern(text, patternString) {
   if (!text || !patternString) return false;
-  
+
   const textLower = text.toLowerCase();
   // Split by comma and trim each term
   const patterns = patternString.split(',').map(p => p.trim()).filter(p => p.length > 0);
-  
+
   // Check if any complete pattern matches
   for (const pattern of patterns) {
     if (textLower.includes(pattern.toLowerCase())) {
       return true;
     }
   }
-  
+
   return false;
 }
 
 // Check if a specific rule matches row data
 function checkRuleMatch(rowData, rule) {
   if (!rule || rule.enabled === false || !rule.pattern) return false;
-  
+
   const pattern = rule.pattern.trim();
-  
+
   switch (rule.type) {
     case 'sender_contains':
       return rowData.sender && matchesAnyPattern(rowData.sender, pattern);
@@ -409,14 +455,14 @@ function extractRowData(row) {
     subject: '',
     labels: []
   };
-  
+
   try {
     // Check if we have cached sender data (from previous extraction)
     const cachedSender = row.getAttribute('data-cached-sender');
     if (cachedSender && cachedSender.includes('@')) {
       data.sender = cachedSender;
     }
-    
+
     // Extract sender - try multiple approaches
     // First, try to get email attribute
     if (!data.sender) {
@@ -429,7 +475,7 @@ function extractRowData(row) {
         }
       }
     }
-    
+
     // If no email attribute, try text content from sender cell
     if (!data.sender) {
       const senderSelectors = [
@@ -440,7 +486,7 @@ function extractRowData(row) {
         'td[class*="yW"] span',
         'td[class*="yW"]'
       ];
-      
+
       for (const selector of senderSelectors) {
         const senderEl = row.querySelector(selector);
         if (senderEl) {
@@ -459,7 +505,7 @@ function extractRowData(row) {
         }
       }
     }
-    
+
     // Fallback: search for email-like patterns in the entire row
     if (!data.sender || !data.sender.includes('@')) {
       const emailPattern = /[\w.-]+@[\w.-]+\.\w+/;
@@ -469,12 +515,12 @@ function extractRowData(row) {
         data.sender = match[0];
       }
     }
-    
+
     // Cache the sender for future use
     if (data.sender && data.sender.includes('@')) {
       row.setAttribute('data-cached-sender', data.sender);
     }
-    
+
     // Extract subject
     const subjectSelectors = [
       '.bqe',
@@ -482,7 +528,7 @@ function extractRowData(row) {
       'span[data-thread-perm-id]',
       '.bog'
     ];
-    
+
     for (const selector of subjectSelectors) {
       const subjectEl = row.querySelector(selector);
       if (subjectEl) {
@@ -490,7 +536,7 @@ function extractRowData(row) {
         if (data.subject) break;
       }
     }
-    
+
     // Extract labels
     const labelSelectors = [
       '.ar',
@@ -498,30 +544,30 @@ function extractRowData(row) {
       '[data-label-name]',
       'span[title]'
     ];
-    
+
     const labelElements = [];
     for (const selector of labelSelectors) {
       const elements = row.querySelectorAll(selector);
       labelElements.push(...Array.from(elements));
     }
-    
+
     // Get unique label texts
     const labelTexts = new Set();
     labelElements.forEach(el => {
-      const labelText = el.getAttribute('data-label-name') || 
-                       el.getAttribute('title') || 
-                       el.textContent || '';
+      const labelText = el.getAttribute('data-label-name') ||
+        el.getAttribute('title') ||
+        el.textContent || '';
       if (labelText.trim()) {
         labelTexts.add(labelText.trim());
       }
     });
-    
+
     data.labels = Array.from(labelTexts);
-    
+
   } catch (error) {
     console.error('Gmail Row Highlighter: Error extracting row data', error);
   }
-  
+
   return data;
 }
 
@@ -529,26 +575,26 @@ function extractRowData(row) {
 function findMatchingRule(rowData) {
   // Ensure we have valid row data
   if (!rowData) return null;
-  
+
   for (const rule of rules) {
     if (rule.enabled === false) continue;
     if (!rule.pattern || !rule.pattern.trim()) continue;
-    
+
     const pattern = rule.pattern.trim();
-    
+
     switch (rule.type) {
       case 'sender_contains':
         if (rowData.sender && matchesAnyPattern(rowData.sender, pattern)) {
           return rule;
         }
         break;
-        
+
       case 'subject_contains':
         if (rowData.subject && matchesAnyPattern(rowData.subject, pattern)) {
           return rule;
         }
         break;
-        
+
       case 'sender_or_subject_contains':
         const senderMatch = rowData.sender && matchesAnyPattern(rowData.sender, pattern);
         const subjectMatch = rowData.subject && matchesAnyPattern(rowData.subject, pattern);
@@ -556,7 +602,7 @@ function findMatchingRule(rowData) {
           return rule;
         }
         break;
-        
+
       case 'label_contains':
         if (rowData.labels && rowData.labels.length > 0) {
           for (const label of rowData.labels) {
@@ -568,7 +614,7 @@ function findMatchingRule(rowData) {
         break;
     }
   }
-  
+
   return null;
 }
 
@@ -577,14 +623,17 @@ function applyHighlight(row, rule) {
   try {
     // Remove any existing highlight
     removeHighlight(row);
-    
+
     // Apply new highlight
     row.setAttribute(DATA_ATTRIBUTE, rule.id);
     row.classList.add('gmail-row-highlighter');
-    row.style.backgroundColor = rule.backgroundColor || '#FFF7CC';
-    
-    // Store rule ID for reference
-    row.setAttribute('data-highlight-color', rule.backgroundColor);
+
+    // Use a safe color fallback
+    const color = rule.backgroundColor || '#FFF7CC';
+    row.style.backgroundColor = color;
+
+    // Store rule ID and color for reference
+    row.setAttribute('data-highlight-color', color);
   } catch (error) {
     console.error('Gmail Row Highlighter: Error applying highlight', error);
   }

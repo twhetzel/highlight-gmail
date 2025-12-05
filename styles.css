@@ -15,10 +15,3 @@
 tr[data-highlight-rule-id] {
   /* Inline styles will be applied via JavaScript for per-rule colors */
 }
-
-/* Additional styling for better visibility */
-tr[data-highlight-rule-id] td {
-  /* Ensure text remains readable */
-  position: relative;
-}
-
