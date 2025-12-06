@@ -27,18 +27,6 @@ A Chrome extension that highlights Gmail message rows based on user-defined rule
 4. Select the `highlight-gmail` directory
 5. The extension is now installed!
 
-### Add Icons (Optional but Recommended)
-
-Before loading the extension, you may want to add icon files:
-
-1. Create three PNG images:
-   - `icons/icon16.png` (16x16 pixels)
-   - `icons/icon48.png` (48x48 pixels)
-   - `icons/icon128.png` (128x128 pixels)
-2. See `icons/README.md` for more details
-
-The extension will work without icons, but Chrome may show warnings.
-
 ## Usage
 
 ### Creating Highlight Rules
