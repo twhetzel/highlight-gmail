@@ -50,22 +50,18 @@ A Chrome extension that highlights Gmail message rows based on user-defined rule
 - **Highlight emails from a specific domain:**
   - Type: Sender Contains
   - Pattern: `@client.com`
-  - Color: `#FFF7CC` (light yellow)
 
 - **Highlight emails with specific subject keywords:**
   - Type: Subject Contains
   - Pattern: `Contract`
-  - Color: `#D6F5D6` (light green)
 
 - **Highlight emails with a specific label:**
   - Type: Label Contains
   - Pattern: `Important`
-  - Color: `#FFE6E6` (light red)
 
 - **Highlight emails matching multiple patterns (OR logic):**
   - Type: Sender or Subject Contains
   - Pattern: `googledev,googlecloud@google.com,GDG,Google Developer Program`
-  - Color: `#E3F2FD` (light blue)
   - *Matches emails containing any of these terms*
 
 ### Managing Rules
