@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Gmail Row Highlighter",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "Highlight Gmail message rows based on sender, subject, or label criteria",
   "permissions": [
     "storage"
